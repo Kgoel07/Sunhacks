@@ -1,180 +1,132 @@
-
+import os
+import io
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 from dotenv import load_dotenv
-from typing import List, Optional, Dict, Any
+import base64
+from PIL import Image 
+
+# --- New Gemini SDK Imports ---
+from google import genai
+from google.genai.errors import APIError
+
+# --- CONFIGURATION & INITIALIZATION ---
+
+# Load environment variables from the .env file
+load_dotenv() 
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
+
+app = Flask(__name__)
+# Enable CORS for communication between frontend (e.g., port 3000) and backend (port 5000)
+CORS(app) 
+
+# Initialize the Gemini Client outside of the request function
+client = None
+try:
+    if GEMINI_API_KEY:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+except Exception as e:
+    print(f"Error initializing Gemini client: {e}")
+    client = None
 
 
+# --- AI LOGIC (Integrated Gemini API) ---
 
-from pydantic import BaseModel, Field
+def process_ai_request(text, image_data):
+    """
+    Handles the core logic for the AI assistant by calling the Gemini API.
+    """
+    if not client:
+         return "Error: Gemini client not initialized. GEMINI_API_KEY is missing or invalid."
 
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import PydanticOutputParser
-from langchain.agents import create_tool_calling_agent, AgentExecutor
-from langchain_google_genai import ChatGoogleGenerativeAI
+    # --- System Prompt with Formatting and Conversational Rules ---
+    final_prompt = (
+    "You are an AI Gym Assistant named 'GymAI'. Your goal is to provide concise, actionable, "
+    "and motivational fitness advice. You should **only** respond to questions related to fitness, "
+    "exercise, workouts, nutrition, and healthy lifestyle habits. If the user asks something "
+    "unrelated, politely respond that it is outside your intended purpose and you cannot provide an answer.\n\n"
 
-from tools import (
-    search_tool,
-    wiki_tool,
-    save_tool,
-    bmi_tool,
-    tdee_tool,
-    macros_tool,
-    unit_convert_tool,
+    "Do not use Markdown formatting (like **bold** or _italics_) in your responses. "
+    "All text should be plain and clean for frontend display.\n\n"
+
+    "When providing a numbered or bulleted list, always put each item on a separate line with a newline "
+    "before the first item if following a paragraph, and a newline after each item. "
+    "Do not place multiple numbers or bullets on a single line. Example format:\n\n"
+    "1. First point.\n"
+    "2. Second point.\n\n"
+
+    "Keep your advice clear, concise, actionable, and motivational, while strictly staying within fitness-related topics."
 )
 
-load_dotenv()  
+    # -----------------------------------------------------------------
 
+    # Prepare the content list
+    content_parts = [final_prompt]
+    
+    # Add the user's question to the prompt
+    if text:
+        content_parts.append(f"\n\nUser Question: {text}")
+    
+    # Process Image Data if present
+    if image_data:
+        try:
+            # Strip the base64 prefix (e.g., "data:image/png;base64,") and decode
+            header, encoded = image_data.split(",", 1)
+            image_bytes = base64.b64decode(encoded)
+            image = Image.open(io.BytesIO(image_bytes))
+            
+            content_parts.append(image)
+        except Exception as e:
+            print(f"Error processing image: {e}")
+            return "Error: Could not decode the uploaded image data."
 
-
-class FitnessResponse(BaseModel):
-    user_profile: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Parsed user info and assumptions. Include keys like age, sex, height_cm, weight_kg, activity_level, equipment, injuries, assumptions, missing_fields.",
-    )
-    goal: str = Field(..., description="Primary goal (e.g., fat loss, muscle gain, endurance).")
-    training_plan: List[Dict[str, Any]] = Field(
-        ...,
-        description="Day-by-day plan; each item can include day, focus, exercises (with sets x reps x RPE/%1RM), warmup, progressions."
-    )
-    cardio_plan: Optional[List[Dict[str, Any]]] = Field(
-        default=None,
-        description="Cardio recommendations (type, intensity, duration, frequency)."
-    )
-    nutrition: Dict[str, Any] = Field(
-        ...,
-        description="Calories, macros (g), sample day, hydration."
-    )
-    recovery: Dict[str, Any] = Field(
-        ...,
-        description="Sleep, deload/mobility/rest guidance."
-    )
-    metrics_to_track: List[str] = Field(
-        default_factory=lambda: ["weight (weekly avg)", "waist", "progress photos", "reps @ RPE", "sleep hours"]
-    )
-    cautions: List[str] = Field(default_factory=list)
-    sources: List[str] = Field(default_factory=list)
-    tools_used: List[str] = Field(default_factory=list)
-
-
-
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    api_version="v1",
-    transport="rest",
-)
-
-parser = PydanticOutputParser(pydantic_object=FitnessResponse)
-
-
-
-
-
-
-prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            """
-You are FitGuidePro, a certified fitness & nutrition assistant.
-
-HARD RULES:
-- Return ONLY a JSON object that matches the FitnessResponse schema provided in {format_instructions}.
-- DO NOT ask follow-up questions in the output. If any information is missing, MAKE REASONABLE ASSUMPTIONS and list them under user_profile.assumptions, and list what was missing under user_profile.missing_fields.
-- Use tools when helpful:
-  - bmi_tool, tdee_tool, macros_tool for numbers
-  - unit_convert_tool for units
-  - search, wikipedia for citations
-  - save_text_to_file ONLY after you produce the final JSON (optional)
-- Safety first.
-
-No extra words outside JSON.
-{format_instructions}
-""",
-        ),
-        ("placeholder", "{chat_history}"),
-        ("human", "{query}"),
-        ("placeholder", "{agent_scratchpad}"),
-    ]
-).partial(format_instructions=parser.get_format_instructions())
-
-
-tools = [
-    search_tool,
-    wiki_tool,
-    save_tool,
-    bmi_tool,
-    tdee_tool,
-    macros_tool,
-    unit_convert_tool,
-]
-
-
-agent = create_tool_calling_agent(llm=llm, prompt=prompt, tools=tools)
-
-agent_executor = AgentExecutor(
-    agent=agent,
-    tools=tools,
-    verbose=True,
-    handle_parsing_errors=True,   
-)
-
-
-if __name__ == "__main__":
-    query = input("Tell me your goal (e.g., 'Lose fat, 23yo male, 5'9, 80kg, desk job, dumbbells at home'): ")
-    raw = agent_executor.invoke({"query": query, "chat_history": []})
-
-    output_text = raw.get("output") if isinstance(raw, dict) else str(raw)
-
+    # Call the Gemini API
     try:
-        structured = parser.parse(output_text)
+        response = client.models.generate_content(
+            model='gemini-2.5-flash', # Excellent multimodal model
+            contents=content_parts,
+        )
+        # Return the clean response text from the model
+        return response.text
+        
+    except APIError as e:
+        print(f"Gemini API Error: {e}")
+        return f"Gemini API Error: Could not get a response. Details: {e}"
+    except Exception as e:
+        print(f"General API Error: {e}")
+        return "An unexpected error occurred while communicating with the AI model."
 
-        # Raw JSON
-        print("\n=== RAW JSON OUTPUT ===")
-        print(structured.model_dump_json(indent=2))
 
-        # Form View
-        print("\n=== FITNESS PLAN (FORM VIEW) ===")
-        print("👤 User Profile:")
-        for k, v in structured.user_profile.items():
-            print(f"   {k}: {v}")
+# --- API ENDPOINT ---
 
-        print(f"\n1. Goal:\n   {structured.goal}")
-
-        print("\n2. Training Plan:")
-        for i, day in enumerate(structured.training_plan, start=1):
-            print(f"   {i}. {day.get('day','Unknown')}: {day.get('focus','')}")
-            for ex in day.get("exercises", []):
-                print(f"       • {ex}")
-
-        if structured.cardio_plan:
-            print("\n3. Cardio Plan:")
-            for c in structured.cardio_plan:
-                print(f"   - {c}")
-
-        print("\n4. Nutrition:")
-        for k, v in structured.nutrition.items():
-            print(f"   {k}: {v}")
-
-        print("\n5. Recovery:")
-        for k, v in structured.recovery.items():
-            print(f"   {k}: {v}")
-
-        print("\n6. Metrics to Track:")
-        for m in structured.metrics_to_track:
-            print(f"   - {m}")
-
-        print("\n7. Cautions:")
-        for c in structured.cautions:
-            print(f"   - {c}")
-
-        print("\n8. Sources:")
-        for s in structured.sources:
-            print(f"   - {s}")
-
-        print("\n9. Tools Used:")
-        for t in structured.tools_used:
-            print(f"   - {t}")
+@app.route('/ask_ai', methods=['POST'])
+def ask_ai_endpoint():
+    """
+    The main API route that receives data from the frontend.
+    """
+    try:
+        # 1. Get the JSON payload sent from the React application
+        data = request.get_json()
+        
+        # 2. Extract the data safely
+        question = data.get('question', '').strip()
+        uploaded_image = data.get('image', None) # Base64 string
+        
+        # 3. Process the data using your AI logic
+        reply = process_ai_request(question, uploaded_image)
+        
+        # 4. Return the AI reply as a JSON object
+        return jsonify({'reply': reply}), 200
 
     except Exception as e:
-        print("\n[WARN] Could not parse model output into FitnessResponse.")
-        print("Error:", e)
-        print("Raw output:\n", output_text)
+        # Log the error for debugging
+        print(f"An error occurred during API processing: {e}")
+        # Return a standard error response to the frontend
+        return jsonify({'reply': 'An internal server error occurred. Please check the backend console.'}), 500
+
+# --- RUN THE SERVER ---
+
+if __name__ == '__main__':
+    status = "Loaded" if client else "Missing/Invalid"
+    print(f"Flask API running. Gemini Client Status: {status}")
+    app.run(debug=True, port=5000, host = "0.0.0.0")
