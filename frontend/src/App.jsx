@@ -80,7 +80,7 @@ export default function App() {
         setUploadedImage(null);
 
         // 5. *** ACTUAL API CALL TO FLASK BACKEND ***
-        const backendUrl = 'http://localhost:5000/ask_ai';
+    const backendUrl = 'http://10.128.49.147:5000/ask_ai';
 
         fetch(backendUrl, {
             method: 'POST',
