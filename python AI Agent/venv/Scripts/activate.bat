@@ -8,7 +8,7 @@ if defined _OLD_CODEPAGE (
     "%SystemRoot%\System32\chcp.com" 65001 > nul
 )
 
-set "VIRTUAL_ENV=C:\Users\shahz\Desktop\Python AI Agent\python AI Agent\venv"
+set "VIRTUAL_ENV=C:\Users\karti\Downloads\Study Stuff\Projects\Sunhacks\python AI Agent\venv"
 
 if not defined PROMPT set PROMPT=$P$G
 

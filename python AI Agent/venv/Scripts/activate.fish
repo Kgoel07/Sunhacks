@@ -33,7 +33,7 @@ end
 # Unset irrelevant variables.
 deactivate nondestructive
 
-set -gx VIRTUAL_ENV 'C:\Users\shahz\Desktop\Python AI Agent\python AI Agent\venv'
+set -gx VIRTUAL_ENV 'C:\Users\karti\Downloads\Study Stuff\Projects\Sunhacks\python AI Agent\venv'
 
 set -gx _OLD_VIRTUAL_PATH $PATH
 set -gx PATH "$VIRTUAL_ENV/"Scripts $PATH
